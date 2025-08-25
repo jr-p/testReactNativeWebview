@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Web Bluetooth サンプル</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+      margin: 0;
+      background-color: #f0f0f0;
+    }
+    .container {
+      background-color: white;
+      padding: 20px;
+      border-radius: 8px;
+      box-shadow: 0 0 10px rgba(0,0,0,0.1);
+      text-align: center;
+    }
+    .form-group {
+      display: flex;
+      align-items: center;
+      margin-bottom: 15px;
+    }
+    label {
+      width: 100px;
+      text-align: right;
+      margin-right: 10px;
+    }
+    input {
+      flex: 1;
+      padding: 8px;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+    }
+    button {
+      width: 100%;
+      padding: 10px;
+      background-color: #007bff;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    button:hover {
+      background-color: #0056b3;
+    }
+    h1 {
+      font-size: 24px;
+      margin-bottom: 20px;
+    }
+    #status {
+      margin-top: 20px;
+      padding: 10px;
+      border-top: 1px solid #ddd;
+      text-align: left;
+      font-size: 14px;
+      color: #333;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Web Bluetooth サンプル</h1>
+    <div class="form-group">
+      <label for="deviceName">端末名</label>
+      <input type="text" id="deviceName" name="deviceName" placeholder="端末名を入力" value="DNSMRA030003473">
+    </div>
+    <div class="form-group">
+      <label for="temperature">設定温度</label>
+      <input type="number" id="temperature" name="temperature" placeholder="温度を入力" value="1">
+    </div>
+    <button type="button" onclick="connectToDevice()">温度を変更</button>
+    <div id="status">待機中</div>
+  </div>
+
+  <script>
+    async function appendStatus(newText) {
+      statusArea = document.getElementById('status');
+      statusArea.innerHTML += '<br>' + newText;
+    }
+
+    async function write16BitValueToCharacteristic(characteristic) {
+
+      // 温度を-30℃起点で変換（-30℃ → 0x01, -29℃ → 0x02, ...）
+      const temperatureInput = document.getElementById('temperature').value;
+      const temperature = parseInt(temperatureInput, 10);
+      const tempOffset = -30;
+      const tempByte = temperature - tempOffset + 1;
+
+      // 書き込む値 (仕様書 P.18)
+      //   Ⅱ-3．Bluetooth通信データ
+      //   情報端末⇒冷凍機ECU送信データ
+      //
+      //   DATA_HEADER : 0byte -> 0x02
+      //   STEMP       : 1byte -> 変換された温度
+      const byte0 = 0x02;
+      const byte1 = tempByte;
+
+      // valueToWriteを16ビット値として作成（ビッグエンディアン: MSB-LSB）
+      const valueToWrite = (byte0 << 8) | byte1;
+
+      // ArrayBufferとDataViewで値を設定
+      const buffer = new ArrayBuffer(2);  // 2バイト(16ビット)
+      const dataView = new DataView(buffer);
+      dataView.setUint16(0, valueToWrite, false);  // false = ビッグエンディアン
+
+      appendStatus('温度設定');
+      appendStatus(`　→　0x${valueToWrite.toString(16).padStart(4, '0')}`);
+      try {
+        await characteristic.writeValueWithoutResponse(buffer);
+        appendStatus('値の書き込みに成功');
+      } catch (error) {
+        appendStatus("");
+        appendStatus(`エラー - ${error.message}`);
+      }
+    }
+
+    async function connectToDevice() {
+      try {
+        // ステータスを更新
+        document.getElementById('status').innerHTML = '';
+        appendStatus('デバイスを選択中...');
+
+        // Bluetoothデバイスを選択
+        const deviceName = document.getElementById('deviceName').value;
+        const device = await navigator.bluetooth.requestDevice({
+          // 必要に応じてUUIDを変更してください
+          filters: [{ name: deviceName }],
+          optionalServices: [ 'e95d0000-251d-470a-a062-fa1922dfa9a8' ]
+        });
+
+        // デバイスに接続
+        appendStatus('端末に接続');
+        appendStatus(`　→　${device.name}`);
+        const server = await device.gatt.connect();
+
+        // 特定のサービスを取得
+        const primaryServiceUuid = '442f1570-8a00-9a28-cbe1-e1d4212d53eb';
+        appendStatus('サービスを取得');
+        appendStatus(`　→　${primaryServiceUuid}`);
+        const service = await server.getPrimaryService(primaryServiceUuid);
+
+        // キャラクタリスティックを取得
+        const characteristicUuid = '442f1572-8a00-9a28-cbe1-e1d4212d53eb';
+        appendStatus('キャラクタリスティックを取得');
+        appendStatus(`　→　${characteristicUuid}`);
+        const characteristic = await service.getCharacteristic(characteristicUuid);
+
+        // 温度を更新
+        await write16BitValueToCharacteristic(characteristic);
+
+      } catch (error) {
+        // エラー処理
+        appendStatus("");
+        appendStatus(`エラー - ${error.message}`);
+        console.error('Bluetoothエラー:', error);
+      }
+
+      try {
+        // 切断
+        appendStatus(`端末から切断...`);
+        await device.gatt.disconnect();
+      } catch (error) {
+        // 何もしない
+      }
+    }
+  </script>
+</body>
+</html>
