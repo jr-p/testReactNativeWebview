@@ -20,11 +20,12 @@ function App() {
     setStatus(prev => prev + '\n' + newText);
   };
 
-  const write16BitValueToCharacteristic = async (characteristic: Characteristic) => {
+  const write16BitValueToCharacteristic = async (characteristic: Characteristic, charUuid: string) => {
     const temperatureValue = parseInt(temperature, 10);
     const tempOffset = -30;
     const tempByte = temperatureValue - tempOffset + 1;
 
+    appendStatus(`温度設定 (${charUuid})`);
     appendStatus('温度計算情報');
     appendStatus(`　温度文字列: "${temperature}"`);
     appendStatus(`　温度数値: ${temperatureValue}`);
@@ -45,7 +46,6 @@ function App() {
     const dataView = new DataView(buffer);
     dataView.setUint16(0, valueToWrite, false);
 
-    appendStatus('温度設定');
     appendStatus(`　→　0x${valueToWrite.toString(16).padStart(4, '0')}`);
     
     try {
@@ -55,21 +55,11 @@ function App() {
       
       appendStatus(`書き込みデータ: ${base64String}`);
       
-      // まずwriteWithoutResponseを試す
-      try {
-        await characteristic.writeWithoutResponse(base64String);
-        appendStatus('値の書き込みに成功 (WriteWithoutResponse)');
-      } catch (writeError: any) {
-        appendStatus(`WriteWithoutResponse失敗: ${writeError.message}`);
-        appendStatus('WriteWithResponseを試行中...');
-        
-        // writeWithoutResponseが失敗した場合、writeWithResponseを試す
-        await characteristic.writeWithResponse(base64String);
-        appendStatus('値の書き込みに成功 (WriteWithResponse)');
-      }
+      // writeWithResponseを使用してレスポンスを確認
+      const response = await characteristic.writeWithResponse(base64String);
+      appendStatus(`書き込み成功 - レスポンス: ${JSON.stringify(response)}`);
     } catch (error: any) {
-      appendStatus('');
-      appendStatus(`書き込みエラー - ${error.message}`);
+      appendStatus(`書き込みエラー (${charUuid}) - ${error.message}`);
     }
   };
 
@@ -256,12 +246,12 @@ function App() {
       appendStatus('サービスを取得');
       appendStatus(`　→　${primaryServiceUuid}`);
 
-      const characteristicUuid = '442f1572-8a00-9a28-cbe1-e1d4212d53eb';
+      const characteristicUuid = '442f1574-8a00-9a28-cbe1-e1d4212d53eb';
       appendStatus('キャラクタリスティックを取得中...');
       appendStatus(`　→　${characteristicUuid}`);
 
       try {
-        // 読み取りではなく、直接書き込み用キャラクタリスティックを取得
+        // サービス情報を取得
         appendStatus('サービス情報を取得中...');
         const services = await connectedDevice.services();
         appendStatus(`サービス数: ${services.length}`);
@@ -282,15 +272,16 @@ function App() {
           appendStatus(`    書き込み可能: ${char.isWritableWithoutResponse || char.isWritableWithResponse}`);
         });
         
+        // 2つ目のキャラクタリスティック（442f1574）で温度設定
         const targetCharacteristic = characteristics.find(char => char.uuid.toLowerCase() === characteristicUuid.toLowerCase());
-        if (!targetCharacteristic) {
-          throw new Error(`キャラクタリスティックが見つかりません: ${characteristicUuid}`);
+        if (targetCharacteristic) {
+          appendStatus('対象キャラクタリスティック発見');
+          appendStatus('write16BitValueToCharacteristic実行中...');
+          await write16BitValueToCharacteristic(targetCharacteristic, characteristicUuid);
+          appendStatus('write16BitValueToCharacteristic完了');
+        } else {
+          appendStatus(`キャラクタリスティックが見つかりません: ${characteristicUuid}`);
         }
-        appendStatus('対象キャラクタリスティック発見');
-        
-        appendStatus('write16BitValueToCharacteristicを実行中...');
-        await write16BitValueToCharacteristic(targetCharacteristic);
-        appendStatus('write16BitValueToCharacteristic完了');
         
       } catch (charError: any) {
         appendStatus('');
