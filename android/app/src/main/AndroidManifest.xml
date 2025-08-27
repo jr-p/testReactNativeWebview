@@ -1,5 +1,28 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
+    <!-- BLE対応端末を宣言（必須ではないが推奨） -->
+    <uses-feature android:name="android.hardware.bluetooth_le" android:required="false" />
+    
+    <!-- Fire OS 7（Android 9/10）向け：BLEスキャンに位置情報が必要 -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    
+    <!-- 後方互換（古機種向け。不要なら省略可） -->
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    
+    <!-- Android 12+（Fire OS 8+）向け -->
+    <uses-permission android:name="android.permission.BLUETOOTH_SCAN"
+        tools:targetApi="31" android:usesPermissionFlags="neverForLocation" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT"
+        tools:targetApi="31" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE"
+        tools:targetApi="31" />
+    
+    <!-- 後方互換（API30以下用。付けておくと楽） -->
+    <uses-permission android:name="android.permission.BLUETOOTH" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" />
+    
+    <!-- ネットワーク（必要なら） -->
     <uses-permission android:name="android.permission.INTERNET" />
 
     <application

@@ -6,7 +6,7 @@
  */
 
 import React, { useState } from 'react';
-import { StatusBar, StyleSheet, useColorScheme, View, Text, TextInput, TouchableOpacity } from 'react-native';
+import { StatusBar, StyleSheet, useColorScheme, View, Text, TextInput, TouchableOpacity, PermissionsAndroid, Platform, Alert, ScrollView } from 'react-native';
 import { BleManager, Device, Characteristic } from 'react-native-ble-plx';
 
 function App() {
@@ -25,6 +25,17 @@ function App() {
     const tempOffset = -30;
     const tempByte = temperatureValue - tempOffset + 1;
 
+    appendStatus('温度計算情報');
+    appendStatus(`　温度文字列: "${temperature}"`);
+    appendStatus(`　温度数値: ${temperatureValue}`);
+    appendStatus(`　tempByte: ${tempByte}`);
+    appendStatus(`　NaN判定: ${isNaN(temperatureValue)}`);
+
+    if (isNaN(temperatureValue)) {
+      appendStatus('エラー: 温度値が無効です');
+      return;
+    }
+
     const byte0 = 0x02;
     const byte1 = tempByte;
 
@@ -38,37 +49,193 @@ function App() {
     appendStatus(`　→　0x${valueToWrite.toString(16).padStart(4, '0')}`);
     
     try {
-      await characteristic.writeWithoutResponse(
-        Buffer.from(buffer).toString('base64')
-      );
-      appendStatus('値の書き込みに成功');
+      // Uint8Arrayに変換してからBase64エンコード
+      const uint8Array = new Uint8Array(buffer);
+      const base64String = btoa(String.fromCharCode(...uint8Array));
+      
+      appendStatus(`書き込みデータ: ${base64String}`);
+      
+      // まずwriteWithoutResponseを試す
+      try {
+        await characteristic.writeWithoutResponse(base64String);
+        appendStatus('値の書き込みに成功 (WriteWithoutResponse)');
+      } catch (writeError: any) {
+        appendStatus(`WriteWithoutResponse失敗: ${writeError.message}`);
+        appendStatus('WriteWithResponseを試行中...');
+        
+        // writeWithoutResponseが失敗した場合、writeWithResponseを試す
+        await characteristic.writeWithResponse(base64String);
+        appendStatus('値の書き込みに成功 (WriteWithResponse)');
+      }
     } catch (error: any) {
       appendStatus('');
-      appendStatus(`エラー - ${error.message}`);
+      appendStatus(`書き込みエラー - ${error.message}`);
+    }
+  };
+
+  const requestBluetoothPermission = async (): Promise<boolean> => {
+    if (Platform.OS === 'ios') {
+      return true;
+    }
+
+    try {
+      // Android APIレベルを正しく取得（Android 10-16対応）
+      const apiLevel = Platform.constants && 'Version' in Platform.constants 
+        ? Platform.constants.Version 
+        : parseInt(Platform.Version as string, 10) || 0;
+      appendStatus(`Android API Level: ${apiLevel}`);
+
+      const permissionsToRequest: string[] = [];
+
+      // Android 10-11 (API 29-30): 位置情報権限が必須
+      if (apiLevel >= 29 && apiLevel <= 30) {
+        permissionsToRequest.push(
+          PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
+          PermissionsAndroid.PERMISSIONS.ACCESS_COARSE_LOCATION
+        );
+        appendStatus('Android 10-11: 位置情報権限をリクエスト');
+      }
+      
+      // Android 12+ (API 31+): 新しいBluetooth権限
+      else if (apiLevel >= 31) {
+        // Android 12+では位置情報権限は不要（neverForLocationフラグ使用）
+        permissionsToRequest.push(
+          PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN,
+          PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT,
+          PermissionsAndroid.PERMISSIONS.BLUETOOTH_ADVERTISE
+        );
+        appendStatus('Android 12+: 新しいBluetooth権限をリクエスト');
+      }
+      
+      // Android 9以下: 位置情報権限が必要（念のため）
+      else {
+        permissionsToRequest.push(
+          PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
+          PermissionsAndroid.PERMISSIONS.ACCESS_COARSE_LOCATION
+        );
+        appendStatus('Android 9以下: 位置情報権限をリクエスト');
+      }
+
+      if (permissionsToRequest.length === 0) {
+        appendStatus('権限リクエストは不要です');
+        return true;
+      }
+
+      appendStatus(`権限をリクエスト中... (${permissionsToRequest.length}個)`);
+      const granted = await PermissionsAndroid.requestMultiple(permissionsToRequest as any);
+
+      // 結果を詳細に表示
+      for (const [permission, result] of Object.entries(granted)) {
+        const permissionName = permission.split('.').pop();
+        appendStatus(`${permissionName}: ${result}`);
+      }
+
+      const allPermissionsGranted = Object.values(granted).every(
+        permission => permission === PermissionsAndroid.RESULTS.GRANTED
+      );
+
+      if (!allPermissionsGranted) {
+        const deniedPermissions = Object.entries(granted)
+          .filter(([_, result]) => result !== PermissionsAndroid.RESULTS.GRANTED)
+          .map(([permission, _]) => permission.split('.').pop());
+        
+        appendStatus(`拒否された権限: ${deniedPermissions.join(', ')}`);
+        Alert.alert('権限エラー', 'Bluetooth使用に必要な権限が許可されていません。設定から権限を許可してください。');
+        return false;
+      }
+      
+      appendStatus('すべての権限が許可されました');
+      return true;
+    } catch (error) {
+      console.error('Permission request error:', error);
+      appendStatus(`権限リクエストエラー: ${error}`);
+      return false;
     }
   };
 
   const connectToDevice = async () => {
     try {
       setStatus('');
-      appendStatus('デバイスを選択中...');
+      appendStatus('権限を確認中...');
 
-      bleManager.startDeviceScan(null, null, (error, device) => {
+      const hasPermission = await requestBluetoothPermission();
+      if (!hasPermission) {
+        appendStatus('権限が許可されていません');
+        return;
+      }
+
+      // Bluetoothの状態を確認
+      appendStatus('Bluetoothの状態を確認中...');
+      const bluetoothState = await bleManager.state();
+      appendStatus(`Bluetooth状態: ${bluetoothState}`);
+      
+      if (bluetoothState !== 'PoweredOn') {
+        appendStatus('Bluetoothが無効です。Bluetoothを有効にしてください。');
+        Alert.alert('Bluetoothエラー', 'Bluetoothが無効です。設定でBluetoothを有効にしてください。');
+        return;
+      }
+
+      appendStatus('デバイスを選択中...');
+      appendStatus(`対象デバイス: ${deviceName}`);
+
+      // Android 10-16向けのスキャンオプション（API別最適化）
+      const apiLevel = Platform.constants && 'Version' in Platform.constants 
+        ? Platform.constants.Version 
+        : parseInt(Platform.Version as string, 10) || 0;
+      
+      let scanOptions = {};
+      
+      if (apiLevel >= 29) {
+        // Android 10+ (API 29+): より詳細なオプション
+        scanOptions = {
+          allowDuplicates: false,
+          scanMode: 1, // SCAN_MODE_LOW_LATENCY
+          callbackType: 1, // CALLBACK_TYPE_ALL_MATCHES
+          matchMode: 1, // MATCH_MODE_AGGRESSIVE
+          numOfMatches: 1, // MATCH_NUM_ONE_ADVERTISEMENT
+          reportDelay: 0,
+        };
+        appendStatus('Android 10+向けスキャンオプション適用');
+      } else {
+        // Android 9以下: 基本的なオプション
+        scanOptions = {
+          allowDuplicates: false,
+        };
+        appendStatus('Android 9以下向けスキャンオプション適用');
+      }
+
+      let deviceFound = false;
+
+      bleManager.startDeviceScan(null, scanOptions, (error, device) => {
         if (error) {
           console.error('Scan error:', error);
+          appendStatus(`スキャンエラー: ${error.message}`);
+          bleManager.stopDeviceScan();
           return;
         }
 
-        if (device?.name === deviceName) {
-          bleManager.stopDeviceScan();
-          connectToFoundDevice(device);
+        if (device) {
+          console.log('Found device:', device.name, device.id, 'RSSI:', device.rssi);
+          appendStatus(`発見: ${device.name || 'Unknown'} (${device.id.substring(0, 8)}...)`);
+          
+          if (device.name === deviceName) {
+            deviceFound = true;
+            bleManager.stopDeviceScan();
+            connectToFoundDevice(device);
+          }
         }
       });
 
       setTimeout(() => {
-        bleManager.stopDeviceScan();
-        appendStatus('デバイスが見つかりませんでした');
-      }, 10000);
+        if (!deviceFound) {
+          bleManager.stopDeviceScan();
+          appendStatus('デバイスが見つかりませんでした');
+          appendStatus('以下を確認してください:');
+          appendStatus('• デバイスの電源が入っているか');
+          appendStatus('• デバイス名が正しいか');
+          appendStatus('• デバイスがペアリング待機中か');
+        }
+      }, 15000); // タイムアウトを15秒に延長
 
     } catch (error: any) {
       appendStatus('');
@@ -90,15 +257,46 @@ function App() {
       appendStatus(`　→　${primaryServiceUuid}`);
 
       const characteristicUuid = '442f1572-8a00-9a28-cbe1-e1d4212d53eb';
-      appendStatus('キャラクタリスティックを取得');
+      appendStatus('キャラクタリスティックを取得中...');
       appendStatus(`　→　${characteristicUuid}`);
 
-      const characteristic = await connectedDevice.readCharacteristicForService(
-        primaryServiceUuid,
-        characteristicUuid
-      );
-
-      await write16BitValueToCharacteristic(characteristic);
+      try {
+        // 読み取りではなく、直接書き込み用キャラクタリスティックを取得
+        appendStatus('サービス情報を取得中...');
+        const services = await connectedDevice.services();
+        appendStatus(`サービス数: ${services.length}`);
+        
+        const targetService = services.find(service => service.uuid.toLowerCase() === primaryServiceUuid.toLowerCase());
+        if (!targetService) {
+          throw new Error(`サービスが見つかりません: ${primaryServiceUuid}`);
+        }
+        appendStatus('対象サービス発見');
+        
+        appendStatus('キャラクタリスティック一覧を取得中...');
+        const characteristics = await targetService.characteristics();
+        appendStatus(`キャラクタリスティック数: ${characteristics.length}`);
+        
+        // 全キャラクタリスティックをログ出力
+        characteristics.forEach((char, index) => {
+          appendStatus(`[${index}] UUID: ${char.uuid}`);
+          appendStatus(`    書き込み可能: ${char.isWritableWithoutResponse || char.isWritableWithResponse}`);
+        });
+        
+        const targetCharacteristic = characteristics.find(char => char.uuid.toLowerCase() === characteristicUuid.toLowerCase());
+        if (!targetCharacteristic) {
+          throw new Error(`キャラクタリスティックが見つかりません: ${characteristicUuid}`);
+        }
+        appendStatus('対象キャラクタリスティック発見');
+        
+        appendStatus('write16BitValueToCharacteristicを実行中...');
+        await write16BitValueToCharacteristic(targetCharacteristic);
+        appendStatus('write16BitValueToCharacteristic完了');
+        
+      } catch (charError: any) {
+        appendStatus('');
+        appendStatus(`キャラクタリスティック操作エラー: ${charError.message}`);
+        throw charError; // 元のcatchブロックで処理される
+      }
 
       appendStatus('端末から切断...');
       await connectedDevice.cancelConnection();
@@ -141,7 +339,9 @@ function App() {
           <Text style={styles.buttonText}>温度を変更</Text>
         </TouchableOpacity>
 
-        <Text style={styles.status}>{status}</Text>
+        <ScrollView style={styles.statusContainer} contentContainerStyle={styles.statusContent}>
+          <Text style={styles.status}>{status}</Text>
+        </ScrollView>
       </View>
     </View>
   );
@@ -206,22 +406,28 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: 'bold',
   },
-  status: {
+  statusContainer: {
     width: '100%',
     backgroundColor: 'white',
-    padding: 15,
     borderRadius: 8,
     borderTopWidth: 1,
     borderTopColor: '#ddd',
-    fontSize: 14,
-    color: '#333',
-    textAlign: 'left',
-    minHeight: 100,
+    maxHeight: 200,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.1,
     shadowRadius: 4,
     elevation: 2,
+  },
+  statusContent: {
+    flexGrow: 1,
+  },
+  status: {
+    padding: 15,
+    fontSize: 14,
+    color: '#333',
+    textAlign: 'left',
+    minHeight: 100,
   },
 });
 
