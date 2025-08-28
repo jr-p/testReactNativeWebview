@@ -6,11 +6,10 @@
  */
 
 import React, { useState } from 'react';
-import { StatusBar, StyleSheet, useColorScheme, View, Text, TextInput, TouchableOpacity, PermissionsAndroid, Platform, Alert, ScrollView } from 'react-native';
+import { StatusBar, StyleSheet, View, Text, TextInput, TouchableOpacity, PermissionsAndroid, Platform, Alert, ScrollView } from 'react-native';
 import { BleManager, Device, Characteristic } from 'react-native-ble-plx';
 
 function App() {
-  const isDarkMode = useColorScheme() === 'dark';
   const [deviceName, setDeviceName] = useState('DNSMRA030003473');
   const [temperature, setTemperature] = useState('1');
   const [status, setStatus] = useState('待機中');
@@ -301,7 +300,7 @@ function App() {
 
   return (
     <View style={styles.container}>
-      <StatusBar barStyle={isDarkMode ? 'light-content' : 'dark-content'} />
+      <StatusBar barStyle={'dark-content'} />
       <View style={styles.content}>
         <Text style={styles.title}>Bluetooth温度設定</Text>
         
