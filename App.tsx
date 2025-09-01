@@ -6,7 +6,7 @@
  */
 
 import React, { useState } from 'react';
-import { StatusBar, StyleSheet, View, Text, TextInput, TouchableOpacity, PermissionsAndroid, Platform, Alert, ScrollView } from 'react-native';
+import { StatusBar, StyleSheet, View, Text, TextInput, TouchableOpacity, PermissionsAndroid, Platform, Alert, ScrollView, Clipboard } from 'react-native';
 import { BleManager, Device, Characteristic } from 'react-native-ble-plx';
 
 function App() {
@@ -14,9 +14,29 @@ function App() {
   const [temperature, setTemperature] = useState('1');
   const [status, setStatus] = useState('待機中');
   const [bleManager] = useState(new BleManager());
+  const [logs, setLogs] = useState<string[]>([]);
 
   const appendStatus = (newText: string) => {
+    const timestamp = new Date().toLocaleTimeString();
+    const logEntry = `[${timestamp}] ${newText}`;
     setStatus(prev => prev + '\n' + newText);
+    setLogs(prev => [...prev, logEntry]);
+  };
+
+  const copyLogs = async () => {
+    try {
+      const allLogs = logs.join('\n');
+      await Clipboard.setString(allLogs);
+      Alert.alert('コピー完了', 'ログがクリップボードにコピーされました');
+    } catch (error) {
+      Alert.alert('エラー', 'ログのコピーに失敗しました');
+    }
+  };
+
+
+  const clearLogs = () => {
+    setStatus('ログをクリア');
+    setLogs([]);
   };
 
   const write16BitValueToCharacteristic = async (characteristic: Characteristic, charUuid: string) => {
@@ -68,7 +88,7 @@ function App() {
     }
 
     try {
-      // Android APIレベルを正しく取得（Android 10-16対応）
+      // Android APIレベルを取得（Android 10-16対応）
       const apiLevel = Platform.constants && 'Version' in Platform.constants 
         ? Platform.constants.Version 
         : parseInt(Platform.Version as string, 10) || 0;
@@ -92,11 +112,11 @@ function App() {
           PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN,
           PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT,
           PermissionsAndroid.PERMISSIONS.BLUETOOTH_ADVERTISE
-        );
+        );   
         appendStatus('Android 12+: 新しいBluetooth権限をリクエスト');
       }
       
-      // Android 9以下: 位置情報権限が必要（念のため）
+      // Android 9以下: 位置情報権限が必要
       else {
         permissionsToRequest.push(
           PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
@@ -224,7 +244,7 @@ function App() {
           appendStatus('• デバイス名が正しいか');
           appendStatus('• デバイスがペアリング待機中か');
         }
-      }, 15000); // タイムアウトを15秒に延長
+      }, 15000); // タイムアウトを15秒
 
     } catch (error: any) {
       appendStatus('');
@@ -237,8 +257,32 @@ function App() {
     try {
       appendStatus('端末に接続');
       appendStatus(`　→　${device.name}`);
-      const connectedDevice = await device.connect();
+      appendStatus(`　→　ID: ${device.id}`);
+      appendStatus(`　→　RSSI: ${device.rssi}dBm`);
+      
+      // Android 12+では接続安定性を向上させる
+      const apiLevel = Platform.constants && 'Version' in Platform.constants 
+        ? Platform.constants.Version 
+        : parseInt(Platform.Version as string, 10) || 0;
+      
+      const connectionOptions = apiLevel >= 31 ? {
+        requestMTU: 512,
+        refreshGatt: 'OnConnected' as const,
+        timeout: 15000 // 15秒に設定
+      } : undefined;
+      
+      appendStatus('接続実行中...');
+      const connectedDevice = await device.connect(connectionOptions);
 
+      appendStatus('接続成功');
+      
+      // Android 16+ではサービス検出の前に少し待機
+      if (apiLevel >= 36) {
+        appendStatus('Android 16+: 接続安定化待機...');
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      }
+      
+      appendStatus('サービス・キャラクタリスティック検出中...');
       await connectedDevice.discoverAllServicesAndCharacteristics();
 
       const primaryServiceUuid = '442f1570-8a00-9a28-cbe1-e1d4212d53eb';
@@ -293,7 +337,21 @@ function App() {
 
     } catch (error: any) {
       appendStatus('');
-      appendStatus(`エラー - ${error.message}`);
+      appendStatus(`接続エラー - ${error.message}`);
+      appendStatus(`エラーコード: ${error.errorCode || 'N/A'}`);
+      appendStatus(`エラー詳細: ${error.reason || 'N/A'}`);
+      
+      // Android 16+でよくあるエラーの対処法を表示
+      const apiLevel = Platform.constants && 'Version' in Platform.constants 
+        ? Platform.constants.Version 
+        : parseInt(Platform.Version as string, 10) || 0;
+        
+      if (apiLevel >= 36 && error.message.includes('disconnected')) {
+        appendStatus('');
+        appendStatus('Android 16のボンドロス問題の可能性があります');
+        appendStatus('デバイスのペアリング解除→再ペアリングを試してください');
+      }
+      
       console.error('Connection error:', error);
     }
   };
@@ -328,6 +386,15 @@ function App() {
         <TouchableOpacity style={styles.button} onPress={connectToDevice}>
           <Text style={styles.buttonText}>温度を変更</Text>
         </TouchableOpacity>
+
+        <View style={styles.logButtonContainer}>
+          <TouchableOpacity style={[styles.logButton, styles.copyButton]} onPress={copyLogs}>
+            <Text style={styles.logButtonText}>ログコピー</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={[styles.logButton, styles.clearButton]} onPress={clearLogs}>
+            <Text style={styles.logButtonText}>クリア</Text>
+          </TouchableOpacity>
+        </View>
 
         <ScrollView style={styles.statusContainer} contentContainerStyle={styles.statusContent}>
           <Text style={styles.status}>{status}</Text>
@@ -418,6 +485,30 @@ const styles = StyleSheet.create({
     color: '#333',
     textAlign: 'left',
     minHeight: 100,
+  },
+  logButtonContainer: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    width: '100%',
+    marginBottom: 10,
+  },
+  logButton: {
+    flex: 1,
+    padding: 10,
+    borderRadius: 5,
+    alignItems: 'center',
+    marginHorizontal: 5,
+  },
+  copyButton: {
+    backgroundColor: '#28a745',
+  },
+  clearButton: {
+    backgroundColor: '#dc3545',
+  },
+  logButtonText: {
+    color: 'white',
+    fontSize: 12,
+    fontWeight: 'bold',
   },
 });
 
